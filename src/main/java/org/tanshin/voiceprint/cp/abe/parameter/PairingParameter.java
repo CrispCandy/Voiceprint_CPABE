@@ -1,10 +1,9 @@
-package com.duwei.cp.abe.parameter;
+package org.tanshin.voiceprint.cp.abe.parameter;
 
 import it.unisa.dia.gas.jpbc.Element;
 import it.unisa.dia.gas.jpbc.Field;
 import it.unisa.dia.gas.jpbc.Pairing;
 import it.unisa.dia.gas.plaf.jpbc.pairing.PairingFactory;
-import it.unisa.dia.gas.plaf.jpbc.pairing.a1.TypeA1CurveGenerator;
 import lombok.Data;
 import lombok.ToString;
 
@@ -40,5 +39,7 @@ public class PairingParameter {
         return pairingParameter;
     }
 
-
+    public Field getGT() {
+        return pairing.getGT();
+    }
 }

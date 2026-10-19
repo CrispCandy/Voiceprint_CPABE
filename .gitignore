@@ -36,3 +36,31 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+# 密钥/序列化产物
+*.ser
+*.dat
+system_keys.dat
+
+# H2 数据库运行文件
+data/*.db
+data/*.trace.db
+
+# Maven
+target/
+*.class
+
+# 前端依赖 & 构建产物
+node_modules/
+src/main/frontend/dist/
+src/main/frontend/node_modules/
+
+# IDE
+.idea/
+*.iml
+.settings/
+.classpath
+.project
+
+# 日志
+*.log

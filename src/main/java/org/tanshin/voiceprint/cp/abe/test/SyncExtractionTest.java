@@ -1,4 +1,6 @@
-package org.tanshin.voiceprint.cp.abe.mfcc;
+package org.tanshin.voiceprint.cp.abe.test;
+
+import org.tanshin.voiceprint.cp.abe.mfcc.MedicalRecord;
 
 import javax.swing.*;
 import java.awt.*;

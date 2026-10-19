@@ -1,6 +1,6 @@
-package com.duwei.cp.abe.text;
+package org.tanshin.voiceprint.cp.abe.text;
 
-import com.duwei.cp.abe.parameter.PublicKey;
+import org.tanshin.voiceprint.cp.abe.parameter.PublicKey;
 import it.unisa.dia.gas.jpbc.Element;
 import it.unisa.dia.gas.jpbc.Field;
 import lombok.Data;
@@ -29,4 +29,13 @@ public class PlainText {
         this.messageValue = G1.newElementFromBytes(messageStr.getBytes(StandardCharsets.UTF_8)).getImmutable();
     }
 
+    /**
+     * 新增构造函数：支持直接传入 Element
+     * 用于混合加密中对 AES 密钥生成的 Element 进行封装
+     */
+    public PlainText(Element messageValue) {
+        this.messageValue = messageValue.getImmutable();
+        // 由于是加密密钥字节，通常不设置 messageStr，或者设置为十六进制/Base64
+        this.messageStr = "AES_KEY_ELEMENT";
+    }
 }

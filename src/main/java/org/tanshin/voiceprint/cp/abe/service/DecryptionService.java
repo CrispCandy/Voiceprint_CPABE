@@ -1,108 +1,181 @@
 package org.tanshin.voiceprint.cp.abe.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper; // 引入 Jackson 工具
 import it.unisa.dia.gas.jpbc.Element;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.tanshin.voiceprint.cp.abe.attribute.Attribute;
 import org.tanshin.voiceprint.cp.abe.engine.CpAneEngine;
+import org.tanshin.voiceprint.cp.abe.entity.AuditLog;
 import org.tanshin.voiceprint.cp.abe.entity.DataResource;
 import org.tanshin.voiceprint.cp.abe.parameter.PublicKey;
 import org.tanshin.voiceprint.cp.abe.parameter.UserPrivateKey;
-import org.tanshin.voiceprint.cp.abe.text.CipherText;
-import org.tanshin.voiceprint.cp.abe.text.ProxyCipherText;
-import org.tanshin.voiceprint.cp.abe.util.AESUtil;
+import org.tanshin.voiceprint.cp.abe.repository.AuditLogRepository;
+import org.tanshin.voiceprint.cp.abe.repository.DataResourceRepository;
+import org.tanshin.voiceprint.cp.abe.structure.AccessTree;
+import org.tanshin.voiceprint.cp.abe.structure.AccessTreeBuildModel;
+import org.tanshin.voiceprint.cp.abe.text.MedicalCipherPackage;
 import org.tanshin.voiceprint.cp.abe.util.ConvertUtils;
 
+import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import java.io.ByteArrayInputStream;
+import java.io.ObjectInputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.Arrays;
+import java.util.stream.Stream;
 
 @Service
 public class DecryptionService {
 
-    @Autowired
-    private CpAneEngine engine;
-    @Autowired
-    private EncryptionService encryptionService; // 用于获取系统 PK/MSK
+    private final DataResourceRepository resourceRepository;
+    private final SystemKeyManager keyManager;
+    private final IpfsService ipfsService;
+    private final AuditLogRepository auditLogRepo;
+    private final CpAneEngine engine = new CpAneEngine();
 
-    /**
-     * 方式 A: 标准 ABE 直接解密
-     */
-    public DecryptionResult decryptStandard(DataResource resource, Set<String> roles) throws Exception {
-        PublicKey pk = encryptionService.getPublicKey();
+    // 实例化 JSON 工具
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-        // 1. 模拟 KDC 根据属性生成私钥
-        List<Attribute> attributes = roles.stream()
-                .map(r -> new Attribute(r, pk))
-                .collect(Collectors.toList());
-        UserPrivateKey sk = engine.keyGen(encryptionService.getMsk(), attributes);
-
-        // 2. 还原密文对象
-        CipherText ctText = CipherText.fromBytes(Base64.getDecoder().decode(resource.getHeaderTextBase64()), pk);
-        CipherText ctVoice = CipherText.fromBytes(Base64.getDecoder().decode(resource.getHeaderVoiceBase64()), pk);
-
-        // 3. ABE 解密获取 Element
-        Element mText = engine.decrypt(pk, sk, ctText);
-        Element mVoice = engine.decrypt(pk, sk, ctVoice);
-
-        if (mText == null || mVoice == null) throw new RuntimeException("权限不匹配，拒绝访问");
-
-        return performFinalAesDecryption(resource, mText, mVoice);
+    public DecryptionService(DataResourceRepository resourceRepository,
+                             SystemKeyManager keyManager,
+                             IpfsService ipfsService,
+                             AuditLogRepository auditLogRepo) {
+        this.resourceRepository = resourceRepository;
+        this.keyManager = keyManager;
+        this.ipfsService = ipfsService;
+        this.auditLogRepo = auditLogRepo;
     }
 
-    /**
-     * 方式 B: 代理重加密 (PRE) 流程
-     * 模拟：代理服务器处理 TK，终端只需处理 RK
-     */
-    public DecryptionResult decryptViaProxy(DataResource resource, Set<String> delegatorRoles) throws Exception {
-        PublicKey pk = encryptionService.getPublicKey();
-
-        // 1. 授权者（Delegator）私钥
-        List<Attribute> attributes = delegatorRoles.stream()
-                .map(r -> new Attribute(r, pk)).toList();
-        UserPrivateKey skDelegator = engine.keyGen(encryptionService.getMsk(), attributes);
-
-        // 2. 生成代理密钥对 (TK, RK)
-        Map<String, Object> proxyKeys = engine.generateProxyKeys(pk, skDelegator);
-        UserPrivateKey tk = (UserPrivateKey) proxyKeys.get("TK");
-        Element rk = (Element) proxyKeys.get("RK");
-
-        // 3. 【代理端】执行重加密转换 (Proxy Transform)
-        CipherText ctText = CipherText.fromBytes(Base64.getDecoder().decode(resource.getHeaderTextBase64()), pk);
-        CipherText ctVoice = CipherText.fromBytes(Base64.getDecoder().decode(resource.getHeaderVoiceBase64()), pk);
-
-        ProxyCipherText pctText = engine.proxyReEncrypt(pk, tk, ctText);
-        ProxyCipherText pctVoice = engine.proxyReEncrypt(pk, tk, ctVoice);
-
-        // 4. 【客户端】使用 RK 极速解密 (仅需一次除法)
-        Element mText = engine.delegateeDecrypt(pctText, rk);
-        Element mVoice = engine.delegateeDecrypt(pctVoice, rk);
-
-        return performFinalAesDecryption(resource, mText, mVoice);
-    }
-
-    /**
-     * 内部公共方法：从 Element 恢复 AES 密钥并解密明文
-     */
-    private DecryptionResult performFinalAesDecryption(DataResource resource, Element mText, Element mVoice) throws Exception {
-        // 恢复 Text AES Key (16字节截取)
-        byte[] rawT = mText.toBytes();
-        SecretKey kText = new SecretKeySpec(rawT, rawT.length - 16, 16, "AES");
-        String text = AESUtil.decrypt(resource.getEncText(), kText);
-
-        // 恢复 Voice AES Key (16字节截取)
-        byte[] rawV = mVoice.toBytes();
-        SecretKey kVoice = new SecretKeySpec(rawV, rawV.length - 16, 16, "AES");
-        byte[] matrixBytes = AESUtil.decryptBytes(Base64.getDecoder().decode(resource.getEncVoice()), kVoice);
-        float[][] matrix = ConvertUtils.bytesToMatrix(matrixBytes);
-
-        return new DecryptionResult(text, matrix);
-    }
-
-    // 内部类用于封装结果
     public record DecryptionResult(String text, float[][] matrix) {}
+
+    public DecryptionResult fullDecryptionFlow(String cid, Set<String> roles, String operatorName) throws Exception {
+        PublicKey pk = keyManager.getSystemKey().getPublicKey();
+
+        DataResource resource = resourceRepository.findAll().stream()
+                .filter(r -> r.getIpfsCid().equals(cid))
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("数据库中找不到该CID对应的资源记录"));
+
+        MedicalCipherPackage pkg = downloadPackage(cid);
+
+        // ⭐ 照图施工：直接根据数据库取出的 JSON 图纸重建树
+        AccessTree textTree = rebuildTreeFromJson(pk, resource.getMsgPolicyModel());
+        pkg.getHeaderText().setAccessTree(textTree);
+
+        AccessTree voiceTree = rebuildTreeFromJson(pk, resource.getVoicePolicyModel());
+        pkg.getHeaderVoice().setAccessTree(voiceTree);
+
+        // 清洗属性 (仅用于生成私钥)
+        Set<String> superCleanRoles = roles.stream()
+                .flatMap(r -> {
+                    if (r == null) return Stream.empty();
+                    String clean = r.replace("[", "").replace("]", "").trim();
+                    return Arrays.stream(clean.split("[,，_\\s]+"));
+                })
+                .filter(s -> s != null && !s.isBlank())
+                .map(String::trim)
+                .collect(Collectors.toSet());
+
+        List<Attribute> attributes = superCleanRoles.stream()
+                .map(name -> new Attribute(name, pk))
+                .collect(Collectors.toList());
+
+        UserPrivateKey userPrivKey = engine.keyGen(keyManager.getSystemKey().getMasterPrivateKey(), attributes);
+
+        String decryptedText = null;
+        float[][] decryptedMatrix = null;
+        boolean anySuccess = false;
+
+        try {
+            Element recText = engine.decrypt(pk, userPrivKey.duplicate(), pkg.getHeaderText());
+            if (recText != null) {
+                SecretKey kText = deriveAESKeyFromElement(recText);
+                decryptedText = decryptAES(pkg.getEncText(), kText);
+                anySuccess = true;
+            }
+        } catch (Exception e) {
+            System.err.println("文本解密数学计算出错: " + e.getMessage());
+        }
+
+        try {
+            Element recVoice = engine.decrypt(pk, userPrivKey.duplicate(), pkg.getHeaderVoice());
+            if (recVoice != null) {
+                SecretKey kVoice = deriveAESKeyFromElement(recVoice);
+                byte[] mBytes = decryptBytesAES(Base64.getDecoder().decode(pkg.getEncVoice()), kVoice);
+                decryptedMatrix = ConvertUtils.bytesToMatrix(mBytes);
+                anySuccess = true;
+            }
+        } catch (Exception e) {
+            System.err.println("声纹解密数学计算出错: " + e.getMessage());
+        }
+
+        if (anySuccess) {
+            recordAuditLog(cid, operatorName, "DECRYPT", true,
+                    (decryptedText != null ? "[Text OK] " : "") + (decryptedMatrix != null ? "[Voice OK]" : ""));
+        } else {
+            recordAuditLog(cid, operatorName, "DECRYPT", false, "属性策略完全不匹配");
+            throw new RuntimeException("权限不足：您的属性无法解密该资源中的任何内容");
+        }
+
+        return new DecryptionResult(decryptedText, decryptedMatrix);
+    }
+
+    // ⭐ 终极解决方案：反序列化 JSON 图纸，原汁原味还原模型！
+    private AccessTree rebuildTreeFromJson(PublicKey pk, String policyModelJson) throws Exception {
+        if (policyModelJson == null || policyModelJson.isBlank()) {
+            throw new RuntimeException("数据异常：数据库中缺失访问树的模型图纸！");
+        }
+        // 直接将其转回加密时的原始数组结构
+        AccessTreeBuildModel[] models = objectMapper.readValue(policyModelJson, AccessTreeBuildModel[].class);
+        return AccessTree.build(pk, models);
+    }
+
+    private SecretKey deriveAESKeyFromElement(Element e) throws Exception {
+        byte[] rawBytes = e.toBytes();
+        byte[] aesKey = new byte[16];
+
+        if (rawBytes.length < 16) {
+            throw new RuntimeException("还原的 Element 字节长度异常，小于16字节！");
+        }
+
+        System.arraycopy(rawBytes, rawBytes.length - 16, aesKey, 0, 16);
+        return new SecretKeySpec(aesKey, "AES");
+    }
+
+    private String decryptAES(String data, SecretKey key) throws Exception {
+        Cipher c = Cipher.getInstance("AES");
+        c.init(Cipher.DECRYPT_MODE, key);
+        return new String(c.doFinal(Base64.getDecoder().decode(data)), StandardCharsets.UTF_8);
+    }
+
+    private byte[] decryptBytesAES(byte[] data, SecretKey key) throws Exception {
+        Cipher c = Cipher.getInstance("AES");
+        c.init(Cipher.DECRYPT_MODE, key);
+        return c.doFinal(data);
+    }
+
+    private MedicalCipherPackage downloadPackage(String cid) throws Exception {
+        byte[] data = ipfsService.download(cid);
+        try (ByteArrayInputStream bis = new ByteArrayInputStream(data);
+             ObjectInputStream ois = new ObjectInputStream(bis)) {
+            return (MedicalCipherPackage) ois.readObject();
+        }
+    }
+
+    private void recordAuditLog(String cid, String op, String type, boolean ok, String msg) {
+        AuditLog log = new AuditLog();
+        log.setOpTime(LocalDateTime.now());
+        log.setActionType(type);
+        log.setTargetCid(cid);
+        log.setOperatorName(op);
+        log.setSuccess(ok);
+        log.setDetail(msg);
+        auditLogRepo.save(log);
+    }
 }

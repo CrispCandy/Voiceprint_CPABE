@@ -1,58 +1,60 @@
-package com.duwei.cp.abe.attribute;
+package org.tanshin.voiceprint.cp.abe.attribute;
 
-import com.duwei.cp.abe.parameter.PublicKey;
 import it.unisa.dia.gas.jpbc.Element;
 import it.unisa.dia.gas.jpbc.Field;
-import lombok.Data;
-
-import javax.swing.*;
+import org.tanshin.voiceprint.cp.abe.parameter.PairingParameter;
+import org.tanshin.voiceprint.cp.abe.parameter.PublicKey;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
-/**
- * @BelongsProject: JPBC-ABE
- * @BelongsPackage: com.duwei.jpbc.cp.abe.attribute
- * @Author: duwei
- * @Date: 2022/7/22 9:04
- * @Description: 用户的属性描述
- * 属性空间 G0
- */
-@Data
-public class Attribute {
-    /**
-     * 用Element元素来标识用户属性
-     */
-    private Element attributeValue;
+public class Attribute implements Serializable {
+    private static final long serialVersionUID = 1L;
+
     private String attributeName;
+    private transient Element attributeValue; // 不参与序列化
 
     public Attribute(String attributeName, PublicKey publicKey){
-        this(attributeName,publicKey.getPairingParameter().getG0());
+        this(attributeName, publicKey.getPairingParameter().getG0());
     }
 
     public Attribute(String attributeName, Field G0){
-        this.attributeName = attributeName;
-        this.attributeValue = G0.newElementFromBytes(attributeName.getBytes(StandardCharsets.UTF_8)).getImmutable();
+        this.attributeName = attributeName != null ? attributeName.trim() : "";
+        initElement(G0);
     }
 
-    @Override
-    public String toString(){
-        return attributeName;
+    private void initElement(Field G0) {
+        // 保证 attributeValue 的生成逻辑在全系统唯一
+        this.attributeValue = G0.newElementFromBytes(this.attributeName.getBytes(StandardCharsets.UTF_8)).getImmutable();
+    }
+
+    public String getAttributeName() { return attributeName; }
+    public Element getAttributeValue() { return attributeValue; }
+
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        out.defaultWriteObject();
+    }
+
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        // 反序列化后，必须从当前的单例 PairingParameter 中恢复数学元素
+        Field G0 = PairingParameter.getInstance().getPairing().getG1();
+        initElement(G0);
     }
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) {
-            return true;
-        }
-        if (!(o instanceof Attribute)) {
-            return false;
-        }
-        Attribute attribute1 = (Attribute) o;
-        return Objects.equals(attributeValue, attribute1.attributeValue) && Objects.equals(attributeName, attribute1.attributeName);
+        if (this == o) return true;
+        if (!(o instanceof Attribute)) return false;
+        Attribute that = (Attribute) o;
+        return Objects.equals(attributeName, that.attributeName);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(attributeValue, attributeName);
+        return Objects.hash(attributeName);
     }
+
+    @Override
+    public String toString() { return attributeName; }
 }

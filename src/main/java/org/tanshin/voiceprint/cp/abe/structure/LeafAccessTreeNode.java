@@ -1,8 +1,8 @@
-package com.duwei.cp.abe.structure;
+package org.tanshin.voiceprint.cp.abe.structure;
 
 
-import com.duwei.cp.abe.attribute.Attribute;
-import com.duwei.cp.abe.parameter.PublicKey;
+import org.tanshin.voiceprint.cp.abe.attribute.Attribute;
+import org.tanshin.voiceprint.cp.abe.parameter.PublicKey;
 import it.unisa.dia.gas.jpbc.Field;
 import lombok.Data;
 import lombok.ToString;

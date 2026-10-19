@@ -25,8 +25,8 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @State(Scope.Benchmark)
-@Warmup(iterations = 3, time = 1)
-@Measurement(iterations = 10, time = 1) // 为了防止纯CP-ABE跑太久，这里设为10轮
+@Warmup(iterations = 5, time = 1)
+@Measurement(iterations = 20, time = 1) // 为了防止纯CP-ABE跑太久，这里设为10轮
 @Fork(1)
 public class SchemeComparisonBenchmark {
 

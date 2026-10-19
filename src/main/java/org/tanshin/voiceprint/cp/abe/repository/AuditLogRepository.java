@@ -3,6 +3,7 @@ package org.tanshin.voiceprint.cp.abe.repository;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 import org.tanshin.voiceprint.cp.abe.entity.AuditLog;
+import org.tanshin.voiceprint.cp.abe.entity.AuditLogEntity;
 
 import java.util.List;
 

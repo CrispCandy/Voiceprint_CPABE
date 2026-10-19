@@ -1,9 +1,6 @@
-package com.duwei.cp.abe.structure;
+package org.tanshin.voiceprint.cp.abe.structure;
 
-import com.duwei.cp.abe.attribute.Attribute;
 import lombok.Data;
-
-import java.util.List;
 
 /**
  * @BelongsProject: CP-ABE

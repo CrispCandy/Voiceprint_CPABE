@@ -27,8 +27,8 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS) // 使用微秒，以便更精确地观察 Online 加密性能
 @State(Scope.Benchmark)
-@Warmup(iterations = 3, time = 1)
-@Measurement(iterations = 10, time = 1)
+@Warmup(iterations = 5, time = 1)
+@Measurement(iterations = 50, time = 1)
 @Fork(1)
 public class OffAbeJmhBenchmark {
 

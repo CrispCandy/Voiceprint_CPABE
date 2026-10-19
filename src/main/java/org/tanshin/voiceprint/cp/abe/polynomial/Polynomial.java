@@ -1,12 +1,9 @@
-package com.duwei.cp.abe.polynomial;
+package org.tanshin.voiceprint.cp.abe.polynomial;
 
 import it.unisa.dia.gas.jpbc.Element;
 import it.unisa.dia.gas.jpbc.Field;
-import it.unisa.dia.gas.jpbc.Pairing;
-import it.unisa.dia.gas.plaf.jpbc.pairing.PairingFactory;
 import lombok.Data;
 
-import java.util.Arrays;
 import java.util.List;
 
 

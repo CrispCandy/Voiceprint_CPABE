@@ -5,95 +5,93 @@ import be.tarsos.dsp.AudioEvent;
 import be.tarsos.dsp.AudioProcessor;
 import be.tarsos.dsp.io.jvm.AudioDispatcherFactory;
 import be.tarsos.dsp.mfcc.MFCC;
-import javax.swing.filechooser.FileNameExtensionFilter;
+import ws.schild.jave.Encoder;
+import ws.schild.jave.MultimediaObject;
+import ws.schild.jave.encode.AudioAttributes;
+import ws.schild.jave.encode.EncodingAttributes;
+
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 
-import javax.swing.*;
+public class MultiFormatVoiceprintExtractor {
 
-
-public class UniversalVoiceprintExtractor {
-
-    public static void main(String[] args) {
-        // 设置 UI 风格为系统原生，看起来更美观
-        try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception e) {}
-
-        // 1. 打开文件选择器
-        File selectedFile = showFileChooser();
-
-        if (selectedFile != null) {
-            System.out.println("正在处理文件: " + selectedFile.getAbsolutePath());
-            processAudio(selectedFile);
-        } else {
-            System.out.println("操作已取消。");
-        }
-    }
-
-    private static File showFileChooser() {
-        JFileChooser chooser = new JFileChooser();
-        // 同时支持 wav 和 mp3
-        FileNameExtensionFilter filter = new FileNameExtensionFilter(
-                "音频文件 (*.wav, *.mp3)", "wav", "mp3");
-        chooser.setFileFilter(filter);
-        chooser.setDialogTitle("选择声纹采样音频");
-
-        int returnVal = chooser.showOpenDialog(null);
-        if (returnVal == JFileChooser.APPROVE_OPTION) {
-            return chooser.getSelectedFile();
-        }
-        return null;
-    }
-
-    private static void processAudio(File file) {
-        // 参数设置：
-        // 采样率 16000Hz 是声纹识别的标准，能过滤高频噪声
-        float sampleRate = 16000;
+    /**
+     * 【核心修改】同步提取 MFCC。
+     * 使用 dispatcher.run() 阻塞主线程，直到文件处理完并返回 List。
+     */
+    public static List<float[]> extractMFCCSync(File wavFile) throws Exception {
+        int sampleRate = 16000;
         int bufferSize = 1024;
         int bufferOverlap = 512;
+        final List<float[]> result = new ArrayList<>();
 
-        // 存储特征矩阵：每一行是一个 13 维的 MFCC 向量
-        List<float[]> mfccMatrix = new ArrayList<>();
+        AudioDispatcher dispatcher = AudioDispatcherFactory.fromFile(wavFile, bufferSize, bufferOverlap);
+        final MFCC mfccProcessor = new MFCC(bufferSize, sampleRate, 13, 40, 133.33f, 8000f);
 
-        try {
-            // AudioDispatcherFactory.fromFile 会根据文件后缀自动调用对应的解码器 (SPI)
-            AudioDispatcher dispatcher = AudioDispatcherFactory.fromFile(file, bufferSize, bufferOverlap);
+        dispatcher.addAudioProcessor(new AudioProcessor() {
+            @Override
+            public boolean process(AudioEvent audioEvent) {
+                mfccProcessor.process(audioEvent);
+                // 必须 clone，否则 list 里存的都是最后一块内存的引用
+                result.add(mfccProcessor.getMFCC().clone());
+                return true;
+            }
 
-            // MFCC 构造参数：bufferSize, sampleRate, 系数个数, 滤波器组数, 最低频率, 最高频率
-            final MFCC mfcc = new MFCC(bufferSize, sampleRate, 13, 40, 133.33f, 8000f);
+            @Override
+            public void processingFinished() {
+                // 处理完成的回调
+            }
+        });
 
-            dispatcher.addAudioProcessor(new AudioProcessor() {
-                @Override
-                public boolean process(AudioEvent audioEvent) {
-                    mfcc.process(audioEvent);
-                    float[] coefficients = mfcc.getMFCC();
-                    // 深度拷贝数据并存入矩阵
-                    mfccMatrix.add(coefficients.clone());
-                    return true;
-                }
+        // 注意：这里使用 run() 而不是开启新线程，保证方法能同步返回数据
+        dispatcher.run();
+        return result;
+    }
 
-                @Override
-                public void processingFinished() {
-                    System.out.println("--- 提取成功 ---");
-                    System.out.println("总计提取帧数: " + mfccMatrix.size());
-                    System.out.println("每帧特征维度: " + (mfccMatrix.isEmpty() ? 0 : mfccMatrix.get(0).length));
+    /**
+     * 将任意音视频格式转为标准采样率的 WAV
+     */
+    public static File convertToStandardWav(File source) throws Exception {
+        File target = File.createTempFile("voiceprint_temp_", ".wav");
+        AudioAttributes audio = new AudioAttributes();
+        audio.setCodec("pcm_s16le");
+        audio.setBitRate(128000);
+        audio.setChannels(1);
+        audio.setSamplingRate(16000);
 
-                    // 打印前 5 帧作为示例
-                    System.out.println("前5帧矩阵数据预览：");
-                    for (int i = 0; i < Math.min(5, mfccMatrix.size()); i++) {
-                        System.out.print("Frame " + i + ": ");
-                        for (float val : mfccMatrix.get(i)) System.out.printf("%8.2f ", val);
-                        System.out.println();
-                    }
-                }
-            });
+        EncodingAttributes attrs = new EncodingAttributes();
+        attrs.setOutputFormat("wav");
+        attrs.setAudioAttributes(audio);
 
-            // 启动处理
-            dispatcher.run();
+        new Encoder().encode(new MultimediaObject(source), target, attrs);
+        return target;
+    }
 
-        } catch (Exception e) {
-            System.err.println("错误：无法解析该音频文件。请检查依赖是否包含 mp3spi。");
-            e.printStackTrace();
+    /**
+     * 调用 Python 脚本进行语音转文字
+     */
+    public static String speechToText(File wavFile) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(
+                "C:\\Users\\Lenovo\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+                "-X", "utf8",
+                "src/main/java/org/tanshin/voiceprint/cp/abe/script/speech_to_text.py",
+                wavFile.getAbsolutePath()
+        );
+
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+
+        StringBuilder result = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), "UTF-8"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                result.append(line);
+            }
         }
+        process.waitFor();
+        return result.toString().trim();
     }
 }

@@ -1,4 +1,4 @@
-package com.duwei.cp.abe.parameter;
+package org.tanshin.voiceprint.cp.abe.parameter;
 
 import it.unisa.dia.gas.jpbc.Element;
 import lombok.Data;

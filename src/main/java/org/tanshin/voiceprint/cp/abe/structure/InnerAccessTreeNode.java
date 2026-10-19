@@ -1,4 +1,4 @@
-package com.duwei.cp.abe.structure;
+package org.tanshin.voiceprint.cp.abe.structure;
 
 import lombok.Data;
 

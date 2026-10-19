@@ -1,15 +1,15 @@
-package com.duwei.cp.abe.structure;
+package org.tanshin.voiceprint.cp.abe.structure;
 
 
-import com.duwei.cp.abe.parameter.PublicKey;
+import org.tanshin.voiceprint.cp.abe.parameter.PublicKey;
 import lombok.Data;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * @BelongsProject: JPBC-ABE
@@ -69,5 +69,47 @@ public class AccessTree {
 
         //根节点元素索引必须为1
         return new AccessTree(idNodeMap.get(1));
+    }
+    public static AccessTree buildFromPolicyString(PublicKey publicKey, String policy) {
+        List<AccessTreeBuildModel> models = new ArrayList<>();
+        AtomicInteger idGenerator = new AtomicInteger(1); // 从 ID=1 开始，符合你的根节点要求
+
+        // 调用递归解析器
+        parseToModels(policy, -1, 1, idGenerator, models);
+
+        // 调用你现有的 build(PublicKey, AccessTreeBuildModel[]) 方法
+        return AccessTree.build(publicKey, models.toArray(new AccessTreeBuildModel[0]));
+    }
+
+    private static int parseToModels(String expression, int parentId, int index,
+                                     AtomicInteger idGen, List<AccessTreeBuildModel> models) {
+        expression = expression.trim();
+        int currentId = idGen.getAndIncrement();
+
+        // 1. 处理括号：如果是 (A AND B) 这种，去掉外层括号
+        if (expression.startsWith("(") && expression.endsWith(")")) {
+            expression = expression.substring(1, expression.length() - 1).trim();
+        }
+
+        // 2. 识别逻辑操作符 (优先级: OR 低于 AND)
+        if (expression.contains(" OR ")) {
+            String[] parts = expression.split(" OR ");
+            // 内部节点：OR 的门限(threshold)是 1
+            models.add(AccessTreeBuildModel.innerAccessTreeBuildModel(currentId, 1, index, parentId));
+            for (int i = 0; i < parts.length; i++) {
+                parseToModels(parts[i], currentId, i + 1, idGen, models);
+            }
+        } else if (expression.contains(" AND ")) {
+            String[] parts = expression.split(" AND ");
+            // 内部节点：AND 的门限(threshold)是 N (全选)
+            models.add(AccessTreeBuildModel.innerAccessTreeBuildModel(currentId, parts.length, index, parentId));
+            for (int i = 0; i < parts.length; i++) {
+                parseToModels(parts[i], currentId, i + 1, idGen, models);
+            }
+        } else {
+            // 3. 叶子节点：即具体的属性字符串
+            models.add(AccessTreeBuildModel.leafAccessTreeBuildModel(currentId, index, expression, parentId));
+        }
+        return currentId;
     }
 }

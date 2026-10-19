@@ -1,5 +1,9 @@
-package com.duwei.cp.abe.util;
+package org.tanshin.voiceprint.cp.abe.util;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.nio.charset.Charset;
 
 /**
@@ -33,4 +37,19 @@ public class ConvertUtils {
         }
         return new String(bytes,startIndex,endIndex - startIndex + 1, Charset.defaultCharset());
     }
+
+    //矩阵序列化
+    public static byte[] matrixToBytes(float[][] matrix) throws Exception {
+        try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
+             ObjectOutputStream oos = new ObjectOutputStream(bos)) {
+            oos.writeObject(matrix);
+            return bos.toByteArray();
+        }
+    }
+
+    public static float[][] bytesToMatrix(byte[] data) throws Exception {
+        ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(data));
+        return (float[][]) ois.readObject();
+    }
+
 }

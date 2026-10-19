@@ -1,6 +1,8 @@
-package com.duwei.cp.abe.parameter;
+package org.tanshin.voiceprint.cp.abe.parameter;
 
 import lombok.Data;
+
+import java.io.Serializable;
 
 /**
  * @BelongsProject: CP-ABE
@@ -10,7 +12,8 @@ import lombok.Data;
  * @Description: 系统密钥，包含系统公钥和系统私钥
  */
 @Data
-public class SystemKey {
+public class SystemKey implements Serializable {
+    private static final long serialVersionUID = 1L;
     private PublicKey publicKey;
     private MasterPrivateKey masterPrivateKey;
 

@@ -1,94 +1,139 @@
 package org.tanshin.voiceprint.cp.abe.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper; // 引入 Jackson 工具
 import it.unisa.dia.gas.jpbc.Element;
 import org.springframework.stereotype.Service;
 import org.tanshin.voiceprint.cp.abe.engine.CpAneEngine;
+import org.tanshin.voiceprint.cp.abe.entity.AuditLog;
 import org.tanshin.voiceprint.cp.abe.entity.DataResource;
 import org.tanshin.voiceprint.cp.abe.mfcc.MedicalRecord;
 import org.tanshin.voiceprint.cp.abe.parameter.*;
+import org.tanshin.voiceprint.cp.abe.repository.AuditLogRepository;
 import org.tanshin.voiceprint.cp.abe.repository.DataResourceRepository;
 import org.tanshin.voiceprint.cp.abe.structure.AccessTree;
 import org.tanshin.voiceprint.cp.abe.structure.AccessTreeBuildModel;
+import org.tanshin.voiceprint.cp.abe.text.CipherText;
+import org.tanshin.voiceprint.cp.abe.text.MedicalCipherPackage;
+import org.tanshin.voiceprint.cp.abe.text.OfflinePackage;
+import org.tanshin.voiceprint.cp.abe.text.PlainText;
 import org.tanshin.voiceprint.cp.abe.util.AESUtil;
 import org.tanshin.voiceprint.cp.abe.util.ConvertUtils;
 
 import javax.crypto.SecretKey;
-import java.io.File;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectOutputStream;
 import java.util.Base64;
 import java.util.Set;
+import java.time.LocalDateTime;
 
 @Service
 public class EncryptionService {
 
     private final DataResourceRepository resourceRepository;
+    private final SystemKeyManager keyManager;
     private final CpAneEngine engine = new CpAneEngine();
-    // 实际项目中，系统密钥应从数据库或配置文件加载，这里模拟初始化
-    private final SystemKey systemKey = SystemKey.build();
+    private final IpfsService ipfsService;
+    private final AuditLogRepository auditLogRepo;
+    private final OfflinePoolManager poolManager;
 
-    public EncryptionService(DataResourceRepository resourceRepository) {
+    // 实例化 JSON 工具
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public EncryptionService(DataResourceRepository resourceRepository,
+                             SystemKeyManager keyManager,
+                             IpfsService ipfsService,
+                             AuditLogRepository auditLogRepo,
+                             OfflinePoolManager poolManager) {
         this.resourceRepository = resourceRepository;
+        this.keyManager = keyManager;
+        this.ipfsService = ipfsService;
+        this.auditLogRepo = auditLogRepo;
+        this.poolManager = poolManager;
     }
 
-    /**
-     * 核心业务流：加密、上传模拟、保存数据库
-     */
-    public String fullEncryptionFlow(MedicalRecord record,
-                                     Set<String> textRoles,
-                                     Set<String> voiceRoles,
-                                     String resourceName) throws Exception {
+    public String fullEncryptionFlow(MedicalRecord record, Set<String> textRoles, Set<String> voiceRoles, String resourceName) throws Exception {
+        PublicKey pk = keyManager.getSystemKey().getPublicKey();
 
-        PublicKey pk = systemKey.getPublicKey();
-
-        // 1. AES 加密
         SecretKey kText = AESUtil.generateAESKey();
         SecretKey kVoice = AESUtil.generateAESKey();
+        Element mText = embedKeyToElement(pk, kText);
+        Element mVoice = embedKeyToElement(pk, kVoice);
+
         String encText = AESUtil.encrypt(record.getMsg(), kText);
         byte[] matrixBytes = ConvertUtils.matrixToBytes(record.getMfccMatrix());
         String encVoiceStr = Base64.getEncoder().encodeToString(AESUtil.encryptBytes(matrixBytes, kVoice));
 
-        // 2. 构造 ABE 访问树 (将 UI 选中的角色转化为 OR 门结构)
-        AccessTree treeText = buildSimpleOrTree(pk, textRoles);
-        AccessTree treeVoice = buildSimpleOrTree(pk, voiceRoles);
+        OfflinePackage textPkg = poolManager.getOfflinePackage(textRoles);
+        OfflinePackage voicePkg = poolManager.getOfflinePackage(voiceRoles);
 
-        // 3. ABE 加密 AES 密钥 (使用你测试代码中的补齐逻辑)
+        // ⭐ 提取图纸：如果离线包有就用离线包的，如果没有就在线生成
+        AccessTreeBuildModel[] textModels = (textPkg != null && textPkg.getBuildModels() != null) ?
+                textPkg.getBuildModels() : poolManager.generateModels(textRoles);
+
+        AccessTreeBuildModel[] voiceModels = (voicePkg != null && voicePkg.getBuildModels() != null) ?
+                voicePkg.getBuildModels() : poolManager.generateModels(voiceRoles);
+
+        // 使用图纸直接建树
+        CipherText headerText = (textPkg != null) ?
+                engine.onlineEncrypt(new PlainText(mText), textPkg) :
+                engine.encrypt(pk, new PlainText(mText), AccessTree.build(pk, textModels));
+
+        CipherText headerVoice = (voicePkg != null) ?
+                engine.onlineEncrypt(new PlainText(mVoice), voicePkg) :
+                engine.encrypt(pk, new PlainText(mVoice), AccessTree.build(pk, voiceModels));
+
+        MedicalCipherPackage pkg = new MedicalCipherPackage();
+        pkg.setCaseId("CASE_" + System.currentTimeMillis());
+        pkg.setEncText(encText);
+        pkg.setEncVoice(encVoiceStr);
+        pkg.setHeaderText(headerText);
+        pkg.setHeaderVoice(headerVoice);
+
+        byte[] pkgBytes;
+        try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
+             ObjectOutputStream oos = new ObjectOutputStream(bos)) {
+            oos.writeObject(pkg);
+            pkgBytes = bos.toByteArray();
+        }
+        String realCid = this.ipfsService.upload(pkgBytes);
+
+        // ⭐ 将图纸序列化为 JSON
+        String textModelJson = objectMapper.writeValueAsString(textModels);
+        String voiceModelJson = objectMapper.writeValueAsString(voiceModels);
+
+        saveMetadataAndLog(resourceName, realCid, textRoles.toString(), voiceRoles.toString(),
+                textModelJson, voiceModelJson, textPkg != null, voicePkg != null);
+
+        return realCid;
+    }
+
+    private Element embedKeyToElement(PublicKey pk, SecretKey key) {
         int g1Length = pk.getPairingParameter().getG1().getLengthInBytes();
-        Element mText = prepareElement(pk, kText, g1Length);
-        Element mVoice = prepareElement(pk, kVoice, g1Length);
+        byte[] paddedKey = new byte[g1Length];
+        System.arraycopy(key.getEncoded(), 0, paddedKey, g1Length - 16, 16);
+        return pk.getPairingParameter().getG1().newElementFromBytes(paddedKey).getImmutable();
+    }
 
-        // 生成 Header (密文头部)
-        // ... 此处省略具体 engine.encrypt 调用，逻辑同你测试代码 ...
-
-        // 4. 模拟 IPFS 上传
-        String fakeCid = "Qm" + Base64.getEncoder().encodeToString(String.valueOf(System.nanoTime()).getBytes()).substring(0, 10);
-
-        // 5. 持久化到 H2 数据库
+    // 更新保存逻辑，新增接收 JSON 格式的模型数据
+    private void saveMetadataAndLog(String name, String cid, String tR, String vR,
+                                    String textModelJson, String voiceModelJson, boolean tH, boolean vH) {
         DataResource entity = new DataResource();
-        entity.setResourceName(resourceName);
-        entity.setIpfsCid(fakeCid);
-        entity.setMsgAccessPolicy(textRoles.toString());
-        entity.setVoiceAccessPolicy(voiceRoles.toString());
-        entity.setOwnerName("admin_user");
+        entity.setResourceName(name);
+        entity.setIpfsCid(cid);
+        entity.setMsgAccessPolicy(tR);
+        entity.setVoiceAccessPolicy(vR);
+        // ⭐ 保存图纸到数据库
+        entity.setMsgPolicyModel(textModelJson);
+        entity.setVoicePolicyModel(voiceModelJson);
+        entity.setCreateTime(LocalDateTime.now());
         resourceRepository.save(entity);
 
-        return fakeCid;
-    }
-
-    // 辅助方法：将多个角色生成一个 1-of-N 的访问树
-    private AccessTree buildSimpleOrTree(PublicKey pk, Set<String> roles) {
-        if (roles.isEmpty()) roles = Set.of("Default");
-        String[] roleArray = roles.toArray(new String[0]);
-        AccessTreeBuildModel[] models = new AccessTreeBuildModel[roleArray.length + 1];
-        // 根节点：阈值为 1 (OR 逻辑)
-        models[0] = AccessTreeBuildModel.innerAccessTreeBuildModel(1, 1, roleArray.length, -1);
-        for (int i = 0; i < roleArray.length; i++) {
-            models[i+1] = AccessTreeBuildModel.leafAccessTreeBuildModel(i+2, 1, roleArray[i], 1);
-        }
-        return AccessTree.build(pk, models);
-    }
-
-    private Element prepareElement(PublicKey pk, SecretKey key, int length) {
-        byte[] padded = new byte[length];
-        System.arraycopy(key.getEncoded(), 0, padded, length - 16, 16);
-        return pk.getPairingParameter().getG1().newElementFromBytes(padded).getImmutable();
+        AuditLog log = new AuditLog();
+        log.setOpTime(LocalDateTime.now());
+        log.setActionType("ENCRYPT");
+        log.setTargetCid(cid);
+        log.setSuccess(true);
+        log.setDetail(String.format("TextHit:%b, VoiceHit:%b", tH, vH));
+        auditLogRepo.save(log);
     }
 }

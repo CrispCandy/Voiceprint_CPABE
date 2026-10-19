@@ -1,6 +1,5 @@
-package com.duwei.cp.abe.structure;
+package org.tanshin.voiceprint.cp.abe.structure;
 
-import com.duwei.cp.abe.attribute.Attribute;
 import it.unisa.dia.gas.jpbc.Element;
 import lombok.Data;
 import lombok.ToString;
